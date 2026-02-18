@@ -37,6 +37,56 @@ def _fit_to_window(img_bgr: np.ndarray, win_w: int, win_h: int) -> np.ndarray:
     return canvas
 
 
+def _wrap_text_by_pixels(
+    text: str,
+    win_w: int,
+    font,
+    font_scale: float,
+    thickness: int,
+    margin: int,
+):
+    """Wrap text so each line fits within win_w - 2*margin pixels."""
+    max_px = max(10, win_w - 2 * margin)
+    lines_out = []
+
+    # keep explicit newlines
+    for para in (text or "").split("\n"):
+        words = para.split(" ")
+        if not words:
+            lines_out.append("")
+            continue
+
+        cur = ""
+        for w in words:
+            candidate = w if cur == "" else (cur + " " + w)
+            (tw, _), _ = cv2.getTextSize(candidate, font, font_scale, thickness)
+
+            if tw <= max_px:
+                cur = candidate
+            else:
+                # flush current line
+                if cur != "":
+                    lines_out.append(cur)
+                    cur = w
+                else:
+                    # single "word" longer than line: hard-split by chars
+                    chunk = ""
+                    for ch in w:
+                        cand2 = chunk + ch
+                        (t2, _), _ = cv2.getTextSize(cand2, font, font_scale, thickness)
+                        if t2 <= max_px:
+                            chunk = cand2
+                        else:
+                            if chunk:
+                                lines_out.append(chunk)
+                            chunk = ch
+                    cur = chunk
+
+        lines_out.append(cur)
+
+    return lines_out
+
+
 def _render_text_canvas(
     text: str,
     win_w: int,
@@ -52,14 +102,9 @@ def _render_text_canvas(
     if not text:
         return canvas
 
-    # Wrap width heuristic: depends on font scale + screen size
-    # Adjust if you want longer/shorter lines.
-    approx_chars_per_line = max(10, int(win_w / (12 * max(0.1, font_scale))))
-    lines = []
-    for para in text.split("\n"):
-        lines.extend(textwrap.wrap(para, width=approx_chars_per_line) or [""])
-
     font = cv2.FONT_HERSHEY_SIMPLEX
+    lines = _wrap_text_by_pixels(text, win_w, font, font_scale, thickness, margin)
+
     line_h = int(round(30 * font_scale)) + 10
     total_h = len(lines) * line_h
 
@@ -93,24 +138,18 @@ class TabletDisplayLifecycleNode(LifecycleNode):
         self.declare_parameter("window_name", "Robot Tablet")
         self.declare_parameter("fullscreen", True)
 
-        # If fullscreen is False, these define the tablet window size.
         self.declare_parameter("window_width", 800)
         self.declare_parameter("window_height", 480)
 
-        # Useful when the tablet is a smaller monitor next to a bigger one:
-        # set x/y so the window appears on the tablet monitor.
         self.declare_parameter("window_x", 0)
         self.declare_parameter("window_y", 0)
 
-        # Text rendering knobs
         self.declare_parameter("font_scale", 1.2)
         self.declare_parameter("font_thickness", 2)
         self.declare_parameter("text_margin", 30)
 
-        # Update rate for GUI (Hz)
         self.declare_parameter("ui_rate_hz", 30.0)
 
-        # QoS (same idea as your wrapper)
         self.declare_parameter("reliability", 1)  # 1=RELIABLE, 2=BEST_EFFORT
 
         # ---- runtime ----
@@ -176,7 +215,6 @@ class TabletDisplayLifecycleNode(LifecycleNode):
         try:
             self.get_logger().info("[tablet_display] Activating...")
 
-            # Create window and move it to tablet screen coordinates (important with multi-monitor)
             self._create_window()
 
             self.text_sub = self.create_subscription(String, self.text_topic, self._on_text, self.qos)
@@ -207,6 +245,8 @@ class TabletDisplayLifecycleNode(LifecycleNode):
             if self.image_sub is not None:
                 self.destroy_subscription(self.image_sub)
                 self.image_sub = None
+
+            self._destroy_window()
 
             self.get_logger().info("[tablet_display] Deactivated.")
             return TransitionCallbackReturn.SUCCESS
@@ -248,7 +288,6 @@ class TabletDisplayLifecycleNode(LifecycleNode):
 
     def _on_image(self, msg: Image) -> None:
         try:
-            # Convert ROS image to OpenCV BGR
             frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
             self.last_img_bgr = frame
             self.mode = "image"
@@ -264,31 +303,33 @@ class TabletDisplayLifecycleNode(LifecycleNode):
         cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
 
         if self.fullscreen:
-            # Fullscreen tends to be best on tablets
             cv2.setWindowProperty(self.window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         else:
             cv2.resizeWindow(self.window_name, self.win_w, self.win_h)
 
-        # Move to target monitor coords (tablet screen)
-        # You may need to tune window_x/window_y for your monitor layout.
         cv2.moveWindow(self.window_name, self.win_x, self.win_y)
 
         self._window_created = True
 
     def _destroy_window(self) -> None:
-        if self._window_created:
-            try:
-                cv2.destroyWindow(self.window_name)
-            except Exception:
-                pass
+        if not self._window_created:
+            return
+
+        try:
+            cv2.destroyWindow(self.window_name)
+
+            for _ in range(10):
+                cv2.waitKey(1)
+
+        except Exception:
+            pass
+
         self._window_created = False
 
     def _ui_tick(self) -> None:
         if not self._window_created:
             return
 
-        # Decide target render size (if fullscreen: we still draw into win_w x win_h)
-        # If you want “true fullscreen size”, set window_width/window_height to tablet’s resolution.
         win_w, win_h = self.win_w, self.win_h
 
         if self.mode == "image" and self.last_img_bgr is not None:
@@ -303,28 +344,30 @@ class TabletDisplayLifecycleNode(LifecycleNode):
             )
 
         cv2.imshow(self.window_name, canvas)
-        # keep window responsive
         cv2.waitKey(1)
 
 
-def main():
-    rclpy.init()
+def main(args=None):
+    rclpy.init(args=args)
     node = TabletDisplayLifecycleNode()
-
-    # Auto-transition like your wrapper (configure -> activate)
-    node.trigger_configure()
-    node.trigger_activate()
+    executor = rclpy.executors.SingleThreadedExecutor()
+    executor.add_node(node)
 
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
         try:
+            executor.shutdown()
+        except Exception:
+            pass
+        try:
             node.destroy_node()
         except Exception:
             pass
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

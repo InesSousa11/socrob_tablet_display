@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
@@ -6,22 +7,25 @@ from launch_ros.actions import LifecycleNode
 
 
 def generate_launch_description():
+    namespace = LaunchConfiguration("namespace")
+
     return LaunchDescription([
+        DeclareLaunchArgument("namespace", default_value="", description="Namespace for tablet display node"),
         DeclareLaunchArgument("text_topic", default_value="/tablet/text"),
         DeclareLaunchArgument("image_topic", default_value="/tablet/image"),
-        DeclareLaunchArgument("fullscreen", default_value="True"),
+        DeclareLaunchArgument("fullscreen", default_value="False"),
         DeclareLaunchArgument("window_width", default_value="800"),
         DeclareLaunchArgument("window_height", default_value="480"),
         DeclareLaunchArgument("window_x", default_value="0"),
         DeclareLaunchArgument("window_y", default_value="0"),
         DeclareLaunchArgument("ui_rate_hz", default_value="30.0"),
-        DeclareLaunchArgument("reliability", default_value="1"),  # 1 reliable, 2 best effort
+        DeclareLaunchArgument("reliability", default_value="1"),  # 1=RELIABLE, 2=BEST_EFFORT
 
         LifecycleNode(
             package="tablet_display",
             executable="tablet_display_lifecycle_node",
             name="tablet_display",
-            output="screen",
+            namespace=namespace,
             parameters=[{
                 "text_topic": LaunchConfiguration("text_topic"),
                 "image_topic": LaunchConfiguration("image_topic"),
@@ -33,5 +37,6 @@ def generate_launch_description():
                 "ui_rate_hz": LaunchConfiguration("ui_rate_hz"),
                 "reliability": LaunchConfiguration("reliability"),
             }],
-        ),
+            output="screen"
+        )
     ])
