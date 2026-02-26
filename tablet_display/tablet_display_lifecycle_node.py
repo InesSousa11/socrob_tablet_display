@@ -346,7 +346,7 @@ class TabletDisplayLifecycleNode(LifecycleNode):
         cv2.imshow(self.window_name, canvas)
         cv2.waitKey(1)
 
-
+"""
 def main(args=None):
     rclpy.init(args=args)
     node = TabletDisplayLifecycleNode()
@@ -370,5 +370,24 @@ def main(args=None):
             rclpy.shutdown()
 
 
+if __name__ == "__main__":
+    main()
+"""
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = TabletDisplayLifecycleNode()
+
+    node.trigger_configure()
+    node.trigger_activate()
+    
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally: 
+        node.destroy_node()
+        rclpy.shutdown()
+        
 if __name__ == "__main__":
     main()
