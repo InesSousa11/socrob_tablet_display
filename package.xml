@@ -4,8 +4,8 @@
   <version>0.0.1</version>
   <description>Lifecycle node that displays text or images on the robot tablet.</description>
 
-  <maintainer email="ines@example.com">Ines</maintainer>
-  <license>MIT</license>
+  <maintainer email="user@todo.todo">user</maintainer>
+  <license>Apache-2.0</license>
 
   <buildtool_depend>ament_python</buildtool_depend>
 
