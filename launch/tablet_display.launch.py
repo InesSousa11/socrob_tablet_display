@@ -11,8 +11,14 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument("namespace", default_value="", description="Namespace for tablet display node"),
+
         DeclareLaunchArgument("text_topic", default_value="/tablet/text"),
         DeclareLaunchArgument("image_topic", default_value="/tablet/image"),
+
+        DeclareLaunchArgument("question_topic", default_value="/tablet/question"),
+        DeclareLaunchArgument("answer_topic", default_value="/tablet/answer"),
+        DeclareLaunchArgument("idle_text", default_value=""),
+
         DeclareLaunchArgument("fullscreen", default_value="False"),
         DeclareLaunchArgument("window_width", default_value="800"),
         DeclareLaunchArgument("window_height", default_value="480"),
@@ -29,6 +35,10 @@ def generate_launch_description():
             parameters=[{
                 "text_topic": LaunchConfiguration("text_topic"),
                 "image_topic": LaunchConfiguration("image_topic"),
+                "question_topic": LaunchConfiguration("question_topic"),
+                "answer_topic": LaunchConfiguration("answer_topic"),
+                "idle_text": LaunchConfiguration("idle_text"),
+
                 "fullscreen": LaunchConfiguration("fullscreen"),
                 "window_width": LaunchConfiguration("window_width"),
                 "window_height": LaunchConfiguration("window_height"),

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 import argparse
+import json
 import time
-from typing import Tuple
+from typing import Tuple, Optional
 
 import cv2
 import rclpy
@@ -39,7 +40,14 @@ def _letterbox_fit(img_bgr, win_w: int, win_h: int) -> Tuple[object, float]:
 
 
 class CUCPublisher(Node):
-    def __init__(self, text_topic: str, image_topic: str, reliable: bool = True):
+    def __init__(
+        self,
+        text_topic: str,
+        image_topic: str,
+        question_topic: str,
+        answer_topic: str,
+        reliable: bool = True,
+    ):
         super().__init__("cuc_publisher")
 
         reliability = QoSReliabilityPolicy.RELIABLE if reliable else QoSReliabilityPolicy.BEST_EFFORT
@@ -52,10 +60,22 @@ class CUCPublisher(Node):
 
         self.text_pub = self.create_publisher(String, text_topic, qos)
         self.image_pub = self.create_publisher(Image, image_topic, qos)
+        self.question_pub = self.create_publisher(String, question_topic, qos)
+
         self.bridge = CvBridge()
 
         self._text_topic = text_topic
         self._image_topic = image_topic
+        self._question_topic = question_topic
+        self._answer_topic = answer_topic
+
+        # Optional: listen for answer responses
+        self._last_answer: Optional[str] = None
+        self._answer_sub = self.create_subscription(String, answer_topic, self._on_answer, qos)
+
+    def _on_answer(self, msg: String):
+        self._last_answer = msg.data
+        self.get_logger().info(f"Received answer on {self._answer_topic}: {msg.data}")
 
     def publish_text(self, s: str):
         msg = String()
@@ -84,29 +104,98 @@ class CUCPublisher(Node):
         msg.header.frame_id = "tablet"
         self.image_pub.publish(msg)
 
+    def publish_question(
+        self,
+        question: str,
+        options: list[str],
+        *,
+        qid: str = "q1",
+        multi: bool = True,
+    ):
+        payload = {
+            "id": qid,
+            "question": question,
+            "options": options,
+            "multi": bool(multi),
+        }
+        msg = String()
+        msg.data = json.dumps(payload, ensure_ascii=False)
+        self.question_pub.publish(msg)
+        self.get_logger().info(
+            f"Published question to {self._question_topic}: id={qid} multi={multi} options={len(options)}"
+        )
+
+    def wait_for_answer(self, timeout_s: float = 0.0) -> Optional[str]:
+        """
+        Block until an answer arrives.
+        If timeout_s <= 0 -> wait forever.
+        Returns raw JSON string or None (only when timed out).
+        """
+        self._last_answer = None
+
+        # Timed wait
+        if timeout_s is not None and timeout_s > 0:
+            deadline = time.time() + float(timeout_s)
+            while time.time() < deadline and rclpy.ok():
+                rclpy.spin_once(self, timeout_sec=0.1)
+                if self._last_answer is not None:
+                    return self._last_answer
+            return None
+
+        # Wait forever
+        while rclpy.ok():
+            rclpy.spin_once(self, timeout_sec=0.1)
+            if self._last_answer is not None:
+                return self._last_answer
+
+        return None
+
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--text-topic", default="/tablet/text")
     ap.add_argument("--image-topic", default="/tablet/image")
+
+    # Question/answer topics
+    ap.add_argument("--question-topic", default="/tablet/question")
+    ap.add_argument("--answer-topic", default="/tablet/answer")
+
     ap.add_argument("--text", default=None, help="Text to show on tablet")
     ap.add_argument("--image", default=None, help="Image filepath to show on tablet")
 
-    # New options (safe defaults)
+    # Image fit options
     ap.add_argument("--fit", action="store_true", help="Letterbox-fit image into tablet size (default ON)")
     ap.add_argument("--no-fit", dest="fit", action="store_false", help="Send original image size")
     ap.set_defaults(fit=True)
-
     ap.add_argument("--win-w", type=int, default=800, help="Target width when --fit is enabled")
     ap.add_argument("--win-h", type=int, default=480, help="Target height when --fit is enabled")
 
     ap.add_argument("--best-effort", action="store_true", help="Use BEST_EFFORT QoS instead of RELIABLE")
     ap.add_argument("--settle-ms", type=int, default=400, help="Time to spin after publish (ms)")
 
+    # Question UI
+    ap.add_argument("--question", default=None, help="Question text to show (JSON UI mode)")
+    ap.add_argument("--options", nargs="+", default=None, help="Options for the question (space-separated)")
+    ap.add_argument("--qid", default="q1", help="Question id")
+    ap.add_argument("--single", action="store_true", help="Single select (default is multi-select)")
+    ap.add_argument("--wait-answer", action="store_true", help="Wait for /tablet/answer and print it")
+    ap.add_argument(
+        "--answer-timeout",
+        type=float,
+        default=0.0,
+        help="Timeout for --wait-answer in seconds. Use 0 for no timeout (wait forever).",
+    )
+
     args = ap.parse_args()
 
     rclpy.init()
-    node = CUCPublisher(args.text_topic, args.image_topic, reliable=(not args.best_effort))
+    node = CUCPublisher(
+        args.text_topic,
+        args.image_topic,
+        args.question_topic,
+        args.answer_topic,
+        reliable=(not args.best_effort),
+    )
 
     try:
         if args.text is not None:
@@ -115,9 +204,27 @@ def main():
         if args.image is not None:
             node.publish_image_file(args.image, fit=args.fit, win_w=args.win_w, win_h=args.win_h)
 
-        t_end = time.time() + (args.settle_ms / 1000.0)
-        while time.time() < t_end and rclpy.ok():
-            rclpy.spin_once(node, timeout_sec=0.05)
+        did_wait = False
+
+        if args.question is not None:
+            opts = args.options or []
+            if len(opts) == 0:
+                raise RuntimeError("You used --question but provided no --options.")
+            node.publish_question(args.question, opts, qid=args.qid, multi=(not args.single))
+
+            if args.wait_answer:
+                did_wait = True
+                ans = node.wait_for_answer(timeout_s=args.answer_timeout)
+                if ans is None:
+                    node.get_logger().warn("No answer received (timeout).")
+                else:
+                    print(ans)
+
+        # If we waited for answer, we already spun enough; no need for settle time.
+        if not did_wait:
+            t_end = time.time() + (args.settle_ms / 1000.0)
+            while time.time() < t_end and rclpy.ok():
+                rclpy.spin_once(node, timeout_sec=0.05)
 
     finally:
         try:

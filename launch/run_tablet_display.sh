@@ -2,7 +2,7 @@
 set -e
 
 source /opt/ros/humble/setup.bash
-source ~/ros2_ws_tablet/install/setup.bash
+source ~/ros2_ws/install/setup.bash
 
 # Tablet monitor origin (from: xrandr --query, XWAYLAND1 800x480+1920+0)
 WIN_X=1920
